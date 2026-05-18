@@ -91,7 +91,12 @@ def _claude_code_oauth() -> tuple[str, int] | None:
 
 
 def resolve() -> Credentials | None:
-    sub = _claude_code_oauth()
+    # Escape hatch: skip Claude Code subscription detection when this env var
+    # is set. Useful for testing the API-key path on a machine that's also
+    # logged into Claude Code.
+    skip_subscription = os.getenv("MINICLAUDE_PREFER_API_KEY") == "1"
+
+    sub = None if skip_subscription else _claude_code_oauth()
     if sub:
         token, _ = sub
         return Credentials(

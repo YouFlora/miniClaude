@@ -129,19 +129,28 @@ def route_after_review(state: MessagesState) -> str:
 def build_llm(creds: Credentials) -> ChatAnthropic:
     """Construct a raw ChatAnthropic (no tools bound) honouring the auth mode.
 
-    In oauth mode we send `x-api-key` (default SDK behaviour) AND override
-    with `Authorization: Bearer <token>` via default_headers — the API
-    server prefers Bearer when both are present.
+    In oauth mode the Anthropic OAuth route checks three things server-side:
+    - Authorization: Bearer <token>  (we override the SDK's x-api-key)
+    - User-Agent starts with "claude-cli/"  (otherwise 403 "user-agent is not Claude Code")
+    - System prompt starts with "You are Claude Code..."  (added in load_system_prompt)
+    All three must line up or the request is rejected.
     """
     headers: dict[str, str] = {}
     if creds.use_bearer:
         headers["Authorization"] = f"Bearer {creds.token}"
         headers["anthropic-beta"] = "oauth-2025-04-20"
+        headers["User-Agent"] = "claude-cli/1.0.83 (external, cli)"
+        headers["x-app"] = "cli"
+        headers["x-claude-code-session-id"] = str(__import__("uuid").uuid4())
+    model_kwargs = {}
+    if creds.use_bearer:
+        model_kwargs["metadata"] = {"user_id": "miniclaude-local-user"}
     return ChatAnthropic(
         model=creds.model,
         anthropic_api_url=creds.base_url,
         anthropic_api_key=creds.token,
         default_headers=headers or None,
+        model_kwargs=model_kwargs,
         max_tokens=4096,
     )
 

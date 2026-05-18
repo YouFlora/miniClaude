@@ -70,7 +70,7 @@ def ask_approvals(console: Console, pending: list) -> dict:
 
 
 async def run_turn_async(agent, console: Console, payload, config) -> None:
-    result = await agent.ainvoke(payload, config=config)
+    result = await asyncio.to_thread(agent.invoke,payload, config=config)
 
     while "__interrupt__" in result:
         interrupts = result["__interrupt__"]
@@ -79,7 +79,7 @@ async def run_turn_async(agent, console: Console, payload, config) -> None:
             pending = itr.value.get("pending", [])
             d = await asyncio.to_thread(ask_approvals, console, pending)
             decisions.update(d)
-        result = await agent.ainvoke(Command(resume=decisions), config=config)
+        result = await asyncio.to_thread(agent.invoke,Command(resume=decisions), config=config)
 
     for m in result["messages"]:
         for tc in getattr(m, "tool_calls", None) or []:
