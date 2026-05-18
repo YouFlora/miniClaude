@@ -34,6 +34,7 @@ from rich.prompt import Prompt
 
 from agent import build_agent
 from checkpointer import list_sessions
+from credentials import resolve as resolve_credentials
 from compactor import (
     DEFAULT_THRESHOLD_TOKENS,
     needs_compact,
@@ -151,14 +152,11 @@ async def amain(args: argparse.Namespace) -> int:
                 console.print(tid)
         return 0
 
-    if not (
-        os.getenv("ANTHROPIC_AUTH_TOKEN")
-        or os.getenv("ANTHROPIC_API_KEY")
-        or os.getenv("OPENROUTER_API_KEY")
-    ):
+    creds = resolve_credentials()
+    if creds is None:
         console.print(
-            "[red]Missing API key. Set one of "
-            "ANTHROPIC_AUTH_TOKEN / ANTHROPIC_API_KEY / OPENROUTER_API_KEY in .env.[/red]"
+            "[red]No credentials found. Log into Claude Code, or set "
+            "ANTHROPIC_API_KEY / OPENROUTER_API_KEY in .env.[/red]"
         )
         return 1
 
@@ -168,6 +166,7 @@ async def amain(args: argparse.Namespace) -> int:
 
     banner = "M8 (M7 + steering via Ctrl+C)"
     console.print(f"[bold cyan]miniClaude[/bold cyan] — {banner}")
+    console.print(f"[dim]auth: {creds.source}  ·  model: {creds.model}[/dim]")
     label = "resumed" if args.resume else "new"
     console.print(
         f"[dim]{label} thread: {thread_id}  ·  /exit · /clear · /compact"

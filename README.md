@@ -41,9 +41,18 @@ miniClaude/
 
 Later milestones will add `tools/`, `prompts/`, `permissions.py`, `checkpointer.py`, and so on.
 
-## Model
+## Auth
 
-Defaults to **OpenRouter** (Anthropic-compatible endpoint). The free model `openai/gpt-oss-120b:free` is enough to run M1. You can swap in the official Anthropic API or any OpenAI-compatible endpoint by editing `.env`.
+miniClaude auto-detects credentials in this order (first hit wins):
+
+1. **Claude Code subscription** — if you're logged into Claude Code on this machine, miniClaude pulls the OAuth token from macOS Keychain or `~/.claude/.credentials.json` and uses your Pro/Max plan's Sonnet/Opus. Zero config.
+2. `ANTHROPIC_AUTH_TOKEN` — any OAuth Bearer token in env.
+3. `ANTHROPIC_API_KEY` — direct Anthropic API billing.
+4. `OPENROUTER_API_KEY` — OpenRouter fallback for cheap / free models.
+
+The startup banner prints which route is in use. To force a specific route, only set env vars for that route.
+
+> ⚠️ Using Claude Code OAuth tokens from a third-party app sits in a grey zone w.r.t. Anthropic TOS. Fine for personal demos and learning; do not deploy this pattern.
 
 ## License
 

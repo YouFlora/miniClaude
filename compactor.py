@@ -27,10 +27,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from langchain_anthropic import ChatAnthropic
 from langchain_core.messages import HumanMessage, RemoveMessage
 
-from agent import resolve_credentials
+from agent import build_llm, current_credentials
 
 
 COMPACT_PROMPT_PATH = Path(__file__).parent / "prompts" / "compact.md"
@@ -49,20 +48,10 @@ def needs_compact(messages, threshold: int = DEFAULT_THRESHOLD_TOKENS) -> bool:
     return usage_input_tokens(messages) >= threshold
 
 
-def _summarizer_llm() -> ChatAnthropic:
-    base_url, api_key, model = resolve_credentials()
-    return ChatAnthropic(
-        model=model,
-        anthropic_api_key=api_key,
-        anthropic_api_url=base_url,
-        max_tokens=4096,
-    )
-
-
 def summarize(messages) -> str:
     """Compress the conversation into the 8-segment summary."""
     prompt = COMPACT_PROMPT_PATH.read_text()
-    llm = _summarizer_llm()
+    llm = build_llm(current_credentials())
     result = llm.invoke([*messages, HumanMessage(prompt)])
     content = result.content
     if isinstance(content, list):

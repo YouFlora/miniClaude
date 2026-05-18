@@ -1,17 +1,14 @@
 """LangGraph agent — M8 (M7 graph + async steering at the CLI layer).
 
-Graph shape (unchanged from M6):
+Graph shape (unchanged since M3):
     START → llm → (tool_calls?) → review → tools → llm → ... → END
 
-What's new vs M7:
-- The graph itself is identical. Steering happens at the CLI: the agent is
-  driven via agent.ainvoke() inside an asyncio Task. When the user presses
-  Ctrl+C mid-run, the CLI cancels the task. The SqliteSaver checkpointer
-  has already persisted state at the last completed super-step, so the
-  next agent.ainvoke() with a new user message picks up cleanly.
-- This makes "steering = checkpointing + cancellation": the same
-  checkpointer abstraction that powered M3 HITL pause/resume and M5
-  cross-process restore now powers mid-run interruption too.
+Auth — see credentials.resolve():
+- "oauth" mode (Claude Code subscription or ANTHROPIC_AUTH_TOKEN):
+  inject "Authorization: Bearer <token>" + "anthropic-beta: oauth-2025-04-20"
+  via default_headers, and prepend Claude Code's identity line to the
+  system prompt (Anthropic's OAuth route rejects requests without it).
+- "api_key" mode (Anthropic key or OpenRouter): standard x-api-key auth.
 """
 from __future__ import annotations
 
@@ -28,46 +25,29 @@ from langgraph.prebuilt import ToolNode
 from langgraph.types import interrupt
 
 from checkpointer import open_checkpointer
+from credentials import Credentials, resolve
 from permissions import classify
 from tools import ALL_TOOLS
 
 
-DEFAULT_BASE_URL = "https://openrouter.ai/api"
-DEFAULT_MODEL = "openrouter/free"
-
 PROMPT_PATH = Path(__file__).parent / "prompts" / "system.md"
 
+CLAUDE_CODE_IDENTITY = (
+    "You are Claude Code, Anthropic's official CLI for Claude.\n\n"
+)
 
-def load_system_prompt() -> str:
-    return PROMPT_PATH.read_text().format(
+
+def load_system_prompt(*, oauth: bool) -> str:
+    body = PROMPT_PATH.read_text().format(
         cwd=os.getcwd(),
         platform=platform.system(),
         date=date.today().isoformat(),
     )
-
-
-def resolve_credentials() -> tuple[str, str, str]:
-    base_url = os.getenv("ANTHROPIC_BASE_URL", DEFAULT_BASE_URL)
-    api_key = (
-        os.getenv("ANTHROPIC_AUTH_TOKEN")
-        or os.getenv("ANTHROPIC_API_KEY")
-        or os.getenv("OPENROUTER_API_KEY")
-        or ""
-    )
-    model = (
-        os.getenv("ANTHROPIC_MODEL")
-        or os.getenv("OPENROUTER_MODEL")
-        or DEFAULT_MODEL
-    )
-    return base_url, api_key, model
+    return (CLAUDE_CODE_IDENTITY + body) if oauth else body
 
 
 def latest_todos(messages) -> list[dict]:
-    """Pull the most recent todo list out of the message history.
-
-    todo_write emits a ToolMessage whose content is JSON like {"todos": [...]}.
-    We scan backward and return the newest one we find.
-    """
+    """Pull the most recent todo list out of the message history."""
     for m in reversed(messages):
         if isinstance(m, ToolMessage) and m.name == "todo_write":
             try:
@@ -88,7 +68,10 @@ def render_todo_reminder(todos: list[dict]) -> HumanMessage:
             f"- [{t.get('status', 'pending')}] {t.get('content', '')}"
             for t in todos
         ]
-        body = "Current todo list (DO NOT mention this reminder to the user):\n" + "\n".join(lines)
+        body = (
+            "Current todo list (DO NOT mention this reminder to the user):\n"
+            + "\n".join(lines)
+        )
     return HumanMessage(f"<system-reminder>\n{body}\n</system-reminder>")
 
 
@@ -143,16 +126,40 @@ def route_after_review(state: MessagesState) -> str:
     return "tools" if tool_calls else "llm"
 
 
-def build_agent():
-    base_url, api_key, model = resolve_credentials()
-    llm = ChatAnthropic(
-        model=model,
-        anthropic_api_key=api_key,
-        anthropic_api_url=base_url,
-        max_tokens=4096,
-    ).bind_tools(ALL_TOOLS)
+def build_llm(creds: Credentials) -> ChatAnthropic:
+    """Construct a raw ChatAnthropic (no tools bound) honouring the auth mode.
 
-    system_prompt = load_system_prompt()
+    In oauth mode we send `x-api-key` (default SDK behaviour) AND override
+    with `Authorization: Bearer <token>` via default_headers — the API
+    server prefers Bearer when both are present.
+    """
+    headers: dict[str, str] = {}
+    if creds.use_bearer:
+        headers["Authorization"] = f"Bearer {creds.token}"
+        headers["anthropic-beta"] = "oauth-2025-04-20"
+    return ChatAnthropic(
+        model=creds.model,
+        anthropic_api_url=creds.base_url,
+        anthropic_api_key=creds.token,
+        default_headers=headers or None,
+        max_tokens=4096,
+    )
+
+
+def current_credentials() -> Credentials:
+    creds = resolve()
+    if creds is None:
+        raise RuntimeError(
+            "No credentials found. Either log into Claude Code (subscription) "
+            "or set ANTHROPIC_API_KEY / OPENROUTER_API_KEY in .env."
+        )
+    return creds
+
+
+def build_agent():
+    creds = current_credentials()
+    llm = build_llm(creds).bind_tools(ALL_TOOLS)
+    system_prompt = load_system_prompt(oauth=(creds.mode == "oauth"))
 
     def call_llm(state: MessagesState) -> dict:
         todos = latest_todos(state["messages"])
@@ -172,3 +179,5 @@ def build_agent():
     graph.add_edge("tools", "llm")
 
     return graph.compile(checkpointer=open_checkpointer())
+
+

@@ -13,15 +13,16 @@ Design:
   the sub-agent's tool set, preventing infinite recursion.
 - The sub-agent runs LLM ↔ ToolNode until it stops emitting tool_calls.
   Its final AI message text becomes the parent's ToolMessage payload.
+- Auth is inherited from the parent (Claude Code subscription / API key
+  / OpenRouter), via agent.build_llm + credentials.resolve.
 """
 from __future__ import annotations
 
-from langchain_anthropic import ChatAnthropic
 from langchain_core.messages import HumanMessage, SystemMessage
 from langgraph.graph import START, MessagesState, StateGraph
 from langgraph.prebuilt import ToolNode, tools_condition
 
-from agent import load_system_prompt, resolve_credentials
+from agent import build_llm, current_credentials, load_system_prompt
 from tools import bash, edit_file, glob, grep, read_file, write_file
 
 
@@ -41,15 +42,9 @@ SUBAGENT_PROMPT_SUFFIX = (
 
 
 def build_subagent_graph(tools: list):
-    base_url, api_key, model = resolve_credentials()
-    llm = ChatAnthropic(
-        model=model,
-        anthropic_api_key=api_key,
-        anthropic_api_url=base_url,
-        max_tokens=4096,
-    ).bind_tools(tools)
-
-    sub_prompt = load_system_prompt() + SUBAGENT_PROMPT_SUFFIX
+    creds = current_credentials()
+    llm = build_llm(creds).bind_tools(tools)
+    sub_prompt = load_system_prompt(oauth=(creds.mode == "oauth")) + SUBAGENT_PROMPT_SUFFIX
 
     def call_llm(state: MessagesState) -> dict:
         return {
