@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""miniClaude CLI — M1: agent loop only (no tools yet).
+"""miniClaude CLI — M2: agent loop with tool system.
 
 Usage:
     python miniClaude.py
@@ -59,7 +59,7 @@ def main() -> int:
     agent = build_agent()
     messages: list = []
 
-    console.print("[bold cyan]miniClaude[/bold cyan] — M1 (agent loop, no tools)")
+    console.print("[bold cyan]miniClaude[/bold cyan] — M2 (agent loop + tools)")
     console.print("[dim]/exit to quit, /clear to reset.[/dim]\n")
 
     while True:
@@ -88,6 +88,9 @@ def main() -> int:
             messages.pop()  # don't keep the failed user turn
             continue
 
+        for m in result["messages"][len(messages):-1]:
+            for tc in getattr(m, "tool_calls", None) or []:
+                console.print(f"[dim]🔧 {tc['name']}({tc.get('args', {})})[/dim]")
         messages = result["messages"]
         reply = messages[-1].content
 
