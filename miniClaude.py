@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""miniClaude CLI — M5: agent loop + tools + HITL + TodoList + persistence.
+"""miniClaude CLI — M6: M5 + SubAgent dispatch via the `task` tool.
 
 Usage:
     python miniClaude.py                       # new session
@@ -109,7 +109,7 @@ def main(argv=None) -> int:
     thread_id = args.resume or uuid.uuid4().hex
     config = {"configurable": {"thread_id": thread_id}}
 
-    banner = "M5 (agent loop + tools + HITL + TodoList + persistence)"
+    banner = "M6 (M5 + SubAgent dispatch)"
     console.print(f"[bold cyan]miniClaude[/bold cyan] — {banner}")
     label = "resumed" if args.resume else "new"
     console.print(f"[dim]{label} thread: {thread_id}  ·  /exit · /clear[/dim]\n")

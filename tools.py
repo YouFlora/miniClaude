@@ -102,4 +102,23 @@ def todo_write(todos: list[dict]) -> str:
     return json.dumps({"todos": todos})
 
 
-ALL_TOOLS = [bash, read_file, write_file, edit_file, grep, glob, todo_write]
+@tool
+def task(description: str, prompt: str, subagent_type: str = "general") -> str:
+    """Launch a stateless sub-agent to handle a self-contained sub-task.
+
+    Use when you'd otherwise burn parent-agent context on a long investigation
+    (e.g. "find every place X is referenced and summarise"). The sub-agent
+    runs to completion and returns ONE final summary; its tool calls are not
+    visible to you.
+
+    subagent_type:
+    - "code-explorer": read-only (read_file / grep / glob). Use for searches.
+    - "general":       full read+write tool set. Use for independent execution.
+
+    Each invocation is stateless — pack the full task description into `prompt`.
+    """
+    from subagent import run_subagent
+    return run_subagent(subagent_type, prompt)
+
+
+ALL_TOOLS = [bash, read_file, write_file, edit_file, grep, glob, todo_write, task]

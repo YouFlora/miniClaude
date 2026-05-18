@@ -1,15 +1,18 @@
-"""LangGraph agent — M5 (M4 + SQLite-backed persistence).
+"""LangGraph agent — M6 (M5 + SubAgent dispatch via the `task` tool).
 
-Graph shape:
+Graph shape (unchanged from M5):
     START → llm → (tool_calls?) → review → tools → llm → ... → END
 
-What's new vs M4:
-- The checkpointer is now SqliteSaver (was MemorySaver), persisting state
-  across process restarts. Resume an old session by passing the same
-  thread_id to invoke(): config={"configurable": {"thread_id": old_id}}.
-- The CLI exposes --resume <id> and --list-sessions for this.
-- The system-reminder + HITL machinery is unchanged: they always worked
-  through the checkpointer abstraction, just in-memory until now.
+What's new vs M5:
+- The `task` tool is wired into ALL_TOOLS. When the LLM emits a task
+  tool_call, ToolNode invokes subagent.run_subagent(), which spins up
+  an ephemeral child StateGraph with a restricted tool set.
+- The sub-agent has its own MessagesState; only its final reply is
+  returned to the parent as a ToolMessage. This is context isolation:
+  parent sees the summary, not the trace.
+- `task` is classified as "auto" — the parent has already approved the
+  high-level intent. (Real Claude Code does inner-tool HITL inside the
+  sub-agent too; skipped here for skeleton simplicity.)
 """
 from __future__ import annotations
 

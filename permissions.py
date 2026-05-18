@@ -7,7 +7,7 @@ Three outcomes:
 """
 from __future__ import annotations
 
-SAFE_TOOLS = {"read_file", "grep", "glob"}
+SAFE_TOOLS = {"read_file", "grep", "glob", "todo_write", "task"}
 ASK_TOOLS = {"write_file", "edit_file", "bash"}
 
 DANGEROUS_BASH_PATTERNS = (
