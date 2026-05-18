@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""miniClaude CLI — M3: agent loop + tools + HITL approval.
+"""miniClaude CLI — M4: agent loop + tools + HITL approval + TodoList.
 
 Usage:
     python miniClaude.py
@@ -90,7 +90,7 @@ def main() -> int:
     thread_id = uuid.uuid4().hex
     config = {"configurable": {"thread_id": thread_id}}
 
-    console.print("[bold cyan]miniClaude[/bold cyan] — M3 (agent loop + tools + HITL)")
+    console.print("[bold cyan]miniClaude[/bold cyan] — M4 (agent loop + tools + HITL + TodoList)")
     console.print(f"[dim]thread: {thread_id}  ·  /exit · /clear[/dim]\n")
 
     while True:

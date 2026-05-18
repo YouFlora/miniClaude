@@ -1,29 +1,30 @@
-"""LangGraph agent — M3 (HITL permissions on top of M2 tool system).
+"""LangGraph agent — M4 (HITL + TodoList with system-reminder injection).
 
 Graph shape:
     START → llm → (tool_calls?) → review → tools → llm → ... → END
-                                     ↓
-                                interrupt() if any tool_call needs approval
 
-- review node inspects every tool_call against permissions.classify():
-  - "auto"  → pass through
-  - "ask"   → call interrupt(payload); front-end resumes with allow/deny
-  - "deny"  → replace tool_call with a rejection ToolMessage (no execution)
-- A checkpointer (MemorySaver here, SqliteSaver in M5) is required for
-  interrupt() to work: it persists state when the graph pauses.
+What's new vs M3:
+- The LLM has a `todo_write` tool to manage its task list.
+- Before every LLM call we scan the message history backward for the most
+  recent todo_write result, render the current todo state, and inject it
+  as a transient "<system-reminder>...</system-reminder>" HumanMessage.
+- The reminder is NOT persisted into state — it's regenerated every turn.
+  This is Yuyz's reverse-engineered mechanism: keep the agent constantly
+  aware of its task list by pushing it into the prompt each turn.
 """
 from __future__ import annotations
 
+import json
 import os
 import platform
 from datetime import date
 from pathlib import Path
 
 from langchain_anthropic import ChatAnthropic
-from langchain_core.messages import SystemMessage, ToolMessage
+from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, START, MessagesState, StateGraph
-from langgraph.prebuilt import ToolNode, tools_condition
+from langgraph.prebuilt import ToolNode
 from langgraph.types import interrupt
 
 from permissions import classify
@@ -60,17 +61,37 @@ def resolve_credentials() -> tuple[str, str, str]:
     return base_url, api_key, model
 
 
-def review_tool_calls(state: MessagesState) -> dict:
-    """Inspect the latest AIMessage's tool_calls and gate them.
+def latest_todos(messages) -> list[dict]:
+    """Pull the most recent todo list out of the message history.
 
-    For each tool_call we either:
-    - let it through (auto)
-    - interrupt() so the user can approve / reject (ask)
-    - skip execution and emit a ToolMessage saying it was denied (deny)
-
-    interrupt() pauses the graph; the front-end calls invoke with
-    Command(resume={call_id: True/False, ...}) to continue.
+    todo_write emits a ToolMessage whose content is JSON like {"todos": [...]}.
+    We scan backward and return the newest one we find.
     """
+    for m in reversed(messages):
+        if isinstance(m, ToolMessage) and m.name == "todo_write":
+            try:
+                return json.loads(m.content).get("todos", [])
+            except (json.JSONDecodeError, AttributeError):
+                return []
+    return []
+
+
+def render_todo_reminder(todos: list[dict]) -> HumanMessage:
+    if not todos:
+        body = (
+            "Your todo list is currently empty. DO NOT mention this to the user. "
+            "If the task would benefit from a todo list, use todo_write."
+        )
+    else:
+        lines = [
+            f"- [{t.get('status', 'pending')}] {t.get('content', '')}"
+            for t in todos
+        ]
+        body = "Current todo list (DO NOT mention this reminder to the user):\n" + "\n".join(lines)
+    return HumanMessage(f"<system-reminder>\n{body}\n</system-reminder>")
+
+
+def review_tool_calls(state: MessagesState) -> dict:
     last = state["messages"][-1]
     tool_calls = getattr(last, "tool_calls", []) or []
 
@@ -133,7 +154,9 @@ def build_agent():
     system_prompt = load_system_prompt()
 
     def call_llm(state: MessagesState) -> dict:
-        messages = [SystemMessage(system_prompt), *state["messages"]]
+        todos = latest_todos(state["messages"])
+        reminder = render_todo_reminder(todos)
+        messages = [SystemMessage(system_prompt), *state["messages"], reminder]
         return {"messages": [llm.invoke(messages)]}
 
     graph = StateGraph(MessagesState)

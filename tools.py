@@ -1,4 +1,7 @@
-"""Six core tools for miniClaude: bash, read_file, write_file, edit_file, grep, glob.
+"""Tools for miniClaude.
+
+M2: bash, read_file, write_file, edit_file, grep, glob
+M4: + todo_write (task self-management)
 
 Each function is decorated with @tool — LangGraph's ToolNode runs it when the
 LLM emits a matching tool_call. The docstring becomes the description the LLM
@@ -6,6 +9,7 @@ sees in the tool schema, so it must teach the model when and how to use it.
 """
 from __future__ import annotations
 
+import json
 import re
 import subprocess
 from pathlib import Path
@@ -84,4 +88,18 @@ def glob(pattern: str, path: str = ".") -> str:
     return "\n".join(matches) or "(no matches)"
 
 
-ALL_TOOLS = [bash, read_file, write_file, edit_file, grep, glob]
+@tool
+def todo_write(todos: list[dict]) -> str:
+    """Create or update your task list for the current session.
+
+    Use proactively when the task has 3+ distinct steps. Each todo is
+    {"id": str, "content": str, "status": "pending" | "in_progress" | "completed"}.
+    Keep at most ONE task in_progress at a time. Call again to update statuses
+    as you work — don't batch completions.
+
+    Skip this tool for trivial single-step requests.
+    """
+    return json.dumps({"todos": todos})
+
+
+ALL_TOOLS = [bash, read_file, write_file, edit_file, grep, glob, todo_write]
