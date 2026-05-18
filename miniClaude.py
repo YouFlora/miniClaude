@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""miniClaude CLI — M7: M6 + auto / manual 8-segment context compaction.
+"""miniClaude CLI — M8: M7 + steering (Ctrl+C interrupts and redirects).
 
 Usage:
     python miniClaude.py                       # new session
@@ -10,10 +10,17 @@ REPL commands:
     /exit       quit
     /clear      start a fresh thread (old one stays in the DB)
     /compact    force compaction of the current thread now
+
+Steering: while the agent is running, press Ctrl+C. The agent task is
+cancelled; the checkpointer has already persisted state up to the last
+completed super-step. You're then prompted for a new direction, which
+gets sent as a fresh user message — the LLM sees the full history plus
+your redirect and continues from there.
 """
 from __future__ import annotations
 
 import argparse
+import asyncio
 import os
 import sys
 import uuid
@@ -61,16 +68,17 @@ def ask_approvals(console: Console, pending: list) -> dict:
     return decisions
 
 
-def run_turn(agent, console: Console, payload, config) -> None:
-    result = agent.invoke(payload, config=config)
+async def run_turn_async(agent, console: Console, payload, config) -> None:
+    result = await agent.ainvoke(payload, config=config)
 
     while "__interrupt__" in result:
         interrupts = result["__interrupt__"]
         decisions = {}
         for itr in interrupts:
             pending = itr.value.get("pending", [])
-            decisions.update(ask_approvals(console, pending))
-        result = agent.invoke(Command(resume=decisions), config=config)
+            d = await asyncio.to_thread(ask_approvals, console, pending)
+            decisions.update(d)
+        result = await agent.ainvoke(Command(resume=decisions), config=config)
 
     for m in result["messages"]:
         for tc in getattr(m, "tool_calls", None) or []:
@@ -81,8 +89,33 @@ def run_turn(agent, console: Console, payload, config) -> None:
     console.print()
 
 
+async def steerable_turn(agent, console: Console, payload, config) -> None:
+    """Run a turn; on Ctrl+C, cancel + ask user for a new direction, repeat."""
+    while True:
+        task = asyncio.create_task(run_turn_async(agent, console, payload, config))
+        try:
+            await task
+            return
+        except KeyboardInterrupt:
+            task.cancel()
+            try:
+                await task
+            except (asyncio.CancelledError, Exception):
+                pass
+            console.print(
+                "\n[yellow]interrupted. state saved to checkpoint. "
+                "type a new direction (empty = stop):[/yellow]"
+            )
+            try:
+                new = (await asyncio.to_thread(input, "↳ ")).strip()
+            except (EOFError, KeyboardInterrupt):
+                return
+            if not new:
+                return
+            payload = {"messages": [HumanMessage(new)]}
+
+
 def maybe_compact(agent, console: Console, config, *, force: bool = False) -> None:
-    """After a turn, check token usage and compact if needed."""
     state = agent.get_state(config)
     messages = state.values.get("messages", [])
     if not messages:
@@ -105,8 +138,7 @@ def parse_args(argv) -> argparse.Namespace:
     return p.parse_args(argv)
 
 
-def main(argv=None) -> int:
-    args = parse_args(argv)
+async def amain(args: argparse.Namespace) -> int:
     load_dotenv()
     console = Console()
 
@@ -134,14 +166,17 @@ def main(argv=None) -> int:
     thread_id = args.resume or uuid.uuid4().hex
     config = {"configurable": {"thread_id": thread_id}}
 
-    banner = "M7 (M6 + 8-segment context compaction)"
+    banner = "M8 (M7 + steering via Ctrl+C)"
     console.print(f"[bold cyan]miniClaude[/bold cyan] — {banner}")
     label = "resumed" if args.resume else "new"
-    console.print(f"[dim]{label} thread: {thread_id}  ·  /exit · /clear[/dim]\n")
+    console.print(
+        f"[dim]{label} thread: {thread_id}  ·  /exit · /clear · /compact"
+        "  ·  Ctrl+C while running = steer[/dim]\n"
+    )
 
     while True:
         try:
-            user_input = Prompt.ask("[bold green]>[/bold green]").strip()
+            user_input = (await asyncio.to_thread(input, "> ")).strip()
         except (EOFError, KeyboardInterrupt):
             console.print("\n[dim]bye[/dim]")
             return 0
@@ -160,11 +195,20 @@ def main(argv=None) -> int:
             continue
 
         try:
-            with console.status("[dim]thinking…[/dim]"):
-                run_turn(agent, console, {"messages": [HumanMessage(user_input)]}, config)
+            await steerable_turn(
+                agent, console, {"messages": [HumanMessage(user_input)]}, config
+            )
             maybe_compact(agent, console, config)
         except Exception as e:
             console.print(f"[red]error: {e}[/red]\n")
+
+
+def main(argv=None) -> int:
+    args = parse_args(argv)
+    try:
+        return asyncio.run(amain(args)) or 0
+    except KeyboardInterrupt:
+        return 0
 
 
 if __name__ == "__main__":

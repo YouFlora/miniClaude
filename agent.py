@@ -1,13 +1,17 @@
-"""LangGraph agent — M7 (M6 + 8-segment context compaction).
+"""LangGraph agent — M8 (M7 graph + async steering at the CLI layer).
 
 Graph shape (unchanged from M6):
     START → llm → (tool_calls?) → review → tools → llm → ... → END
 
-Compaction is driven from the CLI, not from inside the graph, because it
-needs to read state via agent.get_state() and write it back via
-agent.update_state() — both of which want a compiled graph + config in
-hand. See compactor.py + miniClaude.py for the trigger logic; the agent
-itself is unchanged from M6.
+What's new vs M7:
+- The graph itself is identical. Steering happens at the CLI: the agent is
+  driven via agent.ainvoke() inside an asyncio Task. When the user presses
+  Ctrl+C mid-run, the CLI cancels the task. The SqliteSaver checkpointer
+  has already persisted state at the last completed super-step, so the
+  next agent.ainvoke() with a new user message picks up cleanly.
+- This makes "steering = checkpointing + cancellation": the same
+  checkpointer abstraction that powered M3 HITL pause/resume and M5
+  cross-process restore now powers mid-run interruption too.
 """
 from __future__ import annotations
 
