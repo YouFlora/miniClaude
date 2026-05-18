@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""miniClaude CLI — M2: agent loop with tool system.
+"""miniClaude CLI — M3: agent loop + tools + HITL approval.
 
 Usage:
     python miniClaude.py
@@ -12,9 +12,11 @@ from __future__ import annotations
 
 import os
 import sys
+import uuid
 
 from dotenv import load_dotenv
 from langchain_core.messages import HumanMessage
+from langgraph.types import Command
 from rich.console import Console
 from rich.markdown import Markdown
 from rich.prompt import Prompt
@@ -23,11 +25,6 @@ from agent import build_agent
 
 
 def extract_text(content) -> str:
-    """Pull plain text out of an AIMessage.content.
-
-    Anthropic-style responses may be a list of content blocks
-    (text / thinking / redacted_thinking / tool_use). We only show text.
-    """
     if isinstance(content, str):
         return content
     if isinstance(content, list):
@@ -39,6 +36,39 @@ def extract_text(content) -> str:
                 parts.append(block)
         return "\n".join(p for p in parts if p)
     return str(content)
+
+
+def ask_approvals(console: Console, pending: list) -> dict:
+    """Prompt the user for each pending tool call. Returns {call_id: bool}."""
+    decisions = {}
+    for tc in pending:
+        console.print(
+            f"[yellow]agent wants to run:[/yellow] [bold]{tc['name']}[/bold]({tc.get('args', {})})"
+        )
+        ans = Prompt.ask("approve?", choices=["y", "n"], default="n")
+        decisions[tc["id"]] = ans == "y"
+    return decisions
+
+
+def run_turn(agent, console: Console, payload, config) -> None:
+    """Invoke the agent; if it interrupts for approval, resume until done."""
+    result = agent.invoke(payload, config=config)
+
+    while "__interrupt__" in result:
+        interrupts = result["__interrupt__"]
+        decisions = {}
+        for itr in interrupts:
+            pending = itr.value.get("pending", [])
+            decisions.update(ask_approvals(console, pending))
+        result = agent.invoke(Command(resume=decisions), config=config)
+
+    for m in result["messages"]:
+        for tc in getattr(m, "tool_calls", None) or []:
+            console.print(f"[dim]🔧 {tc['name']}({tc.get('args', {})})[/dim]")
+
+    reply = result["messages"][-1].content
+    console.print(Markdown(extract_text(reply)))
+    console.print()
 
 
 def main() -> int:
@@ -57,10 +87,11 @@ def main() -> int:
         return 1
 
     agent = build_agent()
-    messages: list = []
+    thread_id = uuid.uuid4().hex
+    config = {"configurable": {"thread_id": thread_id}}
 
-    console.print("[bold cyan]miniClaude[/bold cyan] — M2 (agent loop + tools)")
-    console.print("[dim]/exit to quit, /clear to reset.[/dim]\n")
+    console.print("[bold cyan]miniClaude[/bold cyan] — M3 (agent loop + tools + HITL)")
+    console.print(f"[dim]thread: {thread_id}  ·  /exit · /clear[/dim]\n")
 
     while True:
         try:
@@ -74,28 +105,16 @@ def main() -> int:
         if user_input == "/exit":
             return 0
         if user_input == "/clear":
-            messages = []
-            console.print("[dim]conversation cleared[/dim]\n")
+            thread_id = uuid.uuid4().hex
+            config = {"configurable": {"thread_id": thread_id}}
+            console.print(f"[dim]new thread: {thread_id}[/dim]\n")
             continue
-
-        messages.append(HumanMessage(content=user_input))
 
         try:
             with console.status("[dim]thinking…[/dim]"):
-                result = agent.invoke({"messages": messages})
+                run_turn(agent, console, {"messages": [HumanMessage(user_input)]}, config)
         except Exception as e:
             console.print(f"[red]error: {e}[/red]\n")
-            messages.pop()  # don't keep the failed user turn
-            continue
-
-        for m in result["messages"][len(messages):-1]:
-            for tc in getattr(m, "tool_calls", None) or []:
-                console.print(f"[dim]🔧 {tc['name']}({tc.get('args', {})})[/dim]")
-        messages = result["messages"]
-        reply = messages[-1].content
-
-        console.print(Markdown(extract_text(reply)))
-        console.print()
 
 
 if __name__ == "__main__":
