@@ -1,16 +1,15 @@
-"""LangGraph agent — M4 (HITL + TodoList with system-reminder injection).
+"""LangGraph agent — M5 (M4 + SQLite-backed persistence).
 
 Graph shape:
     START → llm → (tool_calls?) → review → tools → llm → ... → END
 
-What's new vs M3:
-- The LLM has a `todo_write` tool to manage its task list.
-- Before every LLM call we scan the message history backward for the most
-  recent todo_write result, render the current todo state, and inject it
-  as a transient "<system-reminder>...</system-reminder>" HumanMessage.
-- The reminder is NOT persisted into state — it's regenerated every turn.
-  This is Yuyz's reverse-engineered mechanism: keep the agent constantly
-  aware of its task list by pushing it into the prompt each turn.
+What's new vs M4:
+- The checkpointer is now SqliteSaver (was MemorySaver), persisting state
+  across process restarts. Resume an old session by passing the same
+  thread_id to invoke(): config={"configurable": {"thread_id": old_id}}.
+- The CLI exposes --resume <id> and --list-sessions for this.
+- The system-reminder + HITL machinery is unchanged: they always worked
+  through the checkpointer abstraction, just in-memory until now.
 """
 from __future__ import annotations
 
@@ -22,11 +21,11 @@ from pathlib import Path
 
 from langchain_anthropic import ChatAnthropic
 from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
-from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, START, MessagesState, StateGraph
 from langgraph.prebuilt import ToolNode
 from langgraph.types import interrupt
 
+from checkpointer import open_checkpointer
 from permissions import classify
 from tools import ALL_TOOLS
 
@@ -170,4 +169,4 @@ def build_agent():
     )
     graph.add_edge("tools", "llm")
 
-    return graph.compile(checkpointer=MemorySaver())
+    return graph.compile(checkpointer=open_checkpointer())

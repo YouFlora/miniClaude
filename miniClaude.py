@@ -1,15 +1,18 @@
 #!/usr/bin/env python3
-"""miniClaude CLI — M4: agent loop + tools + HITL approval + TodoList.
+"""miniClaude CLI — M5: agent loop + tools + HITL + TodoList + persistence.
 
 Usage:
-    python miniClaude.py
+    python miniClaude.py                       # new session
+    python miniClaude.py --list-sessions       # show stored thread_ids
+    python miniClaude.py --resume <thread_id>  # continue an old session
 
 REPL commands:
     /exit       quit
-    /clear      reset conversation history
+    /clear      start a fresh thread (old one stays in the DB)
 """
 from __future__ import annotations
 
+import argparse
 import os
 import sys
 import uuid
@@ -22,6 +25,7 @@ from rich.markdown import Markdown
 from rich.prompt import Prompt
 
 from agent import build_agent
+from checkpointer import list_sessions
 
 
 def extract_text(content) -> str:
@@ -39,7 +43,6 @@ def extract_text(content) -> str:
 
 
 def ask_approvals(console: Console, pending: list) -> dict:
-    """Prompt the user for each pending tool call. Returns {call_id: bool}."""
     decisions = {}
     for tc in pending:
         console.print(
@@ -51,7 +54,6 @@ def ask_approvals(console: Console, pending: list) -> dict:
 
 
 def run_turn(agent, console: Console, payload, config) -> None:
-    """Invoke the agent; if it interrupts for approval, resume until done."""
     result = agent.invoke(payload, config=config)
 
     while "__interrupt__" in result:
@@ -71,9 +73,26 @@ def run_turn(agent, console: Console, payload, config) -> None:
     console.print()
 
 
-def main() -> int:
+def parse_args(argv) -> argparse.Namespace:
+    p = argparse.ArgumentParser(prog="miniClaude")
+    p.add_argument("--resume", metavar="THREAD_ID", help="resume an existing session")
+    p.add_argument("--list-sessions", action="store_true", help="list stored sessions")
+    return p.parse_args(argv)
+
+
+def main(argv=None) -> int:
+    args = parse_args(argv)
     load_dotenv()
     console = Console()
+
+    if args.list_sessions:
+        ids = list_sessions()
+        if not ids:
+            console.print("[dim](no sessions stored yet)[/dim]")
+        else:
+            for tid in ids:
+                console.print(tid)
+        return 0
 
     if not (
         os.getenv("ANTHROPIC_AUTH_TOKEN")
@@ -87,11 +106,13 @@ def main() -> int:
         return 1
 
     agent = build_agent()
-    thread_id = uuid.uuid4().hex
+    thread_id = args.resume or uuid.uuid4().hex
     config = {"configurable": {"thread_id": thread_id}}
 
-    console.print("[bold cyan]miniClaude[/bold cyan] — M4 (agent loop + tools + HITL + TodoList)")
-    console.print(f"[dim]thread: {thread_id}  ·  /exit · /clear[/dim]\n")
+    banner = "M5 (agent loop + tools + HITL + TodoList + persistence)"
+    console.print(f"[bold cyan]miniClaude[/bold cyan] — {banner}")
+    label = "resumed" if args.resume else "new"
+    console.print(f"[dim]{label} thread: {thread_id}  ·  /exit · /clear[/dim]\n")
 
     while True:
         try:
