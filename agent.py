@@ -1,18 +1,13 @@
-"""LangGraph agent — M6 (M5 + SubAgent dispatch via the `task` tool).
+"""LangGraph agent — M7 (M6 + 8-segment context compaction).
 
-Graph shape (unchanged from M5):
+Graph shape (unchanged from M6):
     START → llm → (tool_calls?) → review → tools → llm → ... → END
 
-What's new vs M5:
-- The `task` tool is wired into ALL_TOOLS. When the LLM emits a task
-  tool_call, ToolNode invokes subagent.run_subagent(), which spins up
-  an ephemeral child StateGraph with a restricted tool set.
-- The sub-agent has its own MessagesState; only its final reply is
-  returned to the parent as a ToolMessage. This is context isolation:
-  parent sees the summary, not the trace.
-- `task` is classified as "auto" — the parent has already approved the
-  high-level intent. (Real Claude Code does inner-tool HITL inside the
-  sub-agent too; skipped here for skeleton simplicity.)
+Compaction is driven from the CLI, not from inside the graph, because it
+needs to read state via agent.get_state() and write it back via
+agent.update_state() — both of which want a compiled graph + config in
+hand. See compactor.py + miniClaude.py for the trigger logic; the agent
+itself is unchanged from M6.
 """
 from __future__ import annotations
 

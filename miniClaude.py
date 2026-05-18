@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""miniClaude CLI — M6: M5 + SubAgent dispatch via the `task` tool.
+"""miniClaude CLI — M7: M6 + auto / manual 8-segment context compaction.
 
 Usage:
     python miniClaude.py                       # new session
@@ -9,6 +9,7 @@ Usage:
 REPL commands:
     /exit       quit
     /clear      start a fresh thread (old one stays in the DB)
+    /compact    force compaction of the current thread now
 """
 from __future__ import annotations
 
@@ -26,6 +27,13 @@ from rich.prompt import Prompt
 
 from agent import build_agent
 from checkpointer import list_sessions
+from compactor import (
+    DEFAULT_THRESHOLD_TOKENS,
+    needs_compact,
+    replace_with_summary,
+    summarize,
+    usage_input_tokens,
+)
 
 
 def extract_text(content) -> str:
@@ -73,6 +81,23 @@ def run_turn(agent, console: Console, payload, config) -> None:
     console.print()
 
 
+def maybe_compact(agent, console: Console, config, *, force: bool = False) -> None:
+    """After a turn, check token usage and compact if needed."""
+    state = agent.get_state(config)
+    messages = state.values.get("messages", [])
+    if not messages:
+        return
+    if not force and not needs_compact(messages):
+        return
+    used = usage_input_tokens(messages)
+    console.print(
+        f"[dim]compacting: input_tokens={used} (threshold {DEFAULT_THRESHOLD_TOKENS})…[/dim]"
+    )
+    summary = summarize(messages)
+    replace_with_summary(agent, config, messages, summary)
+    console.print(f"[dim]compacted → {len(summary)} chars summary[/dim]\n")
+
+
 def parse_args(argv) -> argparse.Namespace:
     p = argparse.ArgumentParser(prog="miniClaude")
     p.add_argument("--resume", metavar="THREAD_ID", help="resume an existing session")
@@ -109,7 +134,7 @@ def main(argv=None) -> int:
     thread_id = args.resume or uuid.uuid4().hex
     config = {"configurable": {"thread_id": thread_id}}
 
-    banner = "M6 (M5 + SubAgent dispatch)"
+    banner = "M7 (M6 + 8-segment context compaction)"
     console.print(f"[bold cyan]miniClaude[/bold cyan] — {banner}")
     label = "resumed" if args.resume else "new"
     console.print(f"[dim]{label} thread: {thread_id}  ·  /exit · /clear[/dim]\n")
@@ -130,10 +155,14 @@ def main(argv=None) -> int:
             config = {"configurable": {"thread_id": thread_id}}
             console.print(f"[dim]new thread: {thread_id}[/dim]\n")
             continue
+        if user_input == "/compact":
+            maybe_compact(agent, console, config, force=True)
+            continue
 
         try:
             with console.status("[dim]thinking…[/dim]"):
                 run_turn(agent, console, {"messages": [HumanMessage(user_input)]}, config)
+            maybe_compact(agent, console, config)
         except Exception as e:
             console.print(f"[red]error: {e}[/red]\n")
 
