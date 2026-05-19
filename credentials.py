@@ -1,12 +1,15 @@
 """Detect and load credentials for the Anthropic API.
 
 Priority order (first hit wins):
-1. Claude Code subscription OAuth — read from macOS Keychain or
-   ~/.claude/.credentials.json. Lets users with a Pro/Max plan use
-   Sonnet/Opus from miniClaude without a separate API bill.
-2. ANTHROPIC_AUTH_TOKEN env — any OAuth Bearer token.
-3. ANTHROPIC_API_KEY env — direct Anthropic API billing (sk-ant-...).
-4. OPENROUTER_API_KEY env — OpenRouter route (cheap / free models).
+1. Claude CLI backend — if `claude --version` works on PATH, delegate
+   each LLM call to `claude -p` and reuse the user's local subscription.
+   No OAuth header guessing — the CLI handles auth itself.
+2. Claude Code subscription OAuth (raw) — pull token from macOS Keychain
+   or ~/.claude/.credentials.json and call api.anthropic.com directly.
+   Bypassed if path 1 worked.
+3. ANTHROPIC_AUTH_TOKEN env — any OAuth Bearer token.
+4. ANTHROPIC_API_KEY env — direct Anthropic API billing (sk-ant-...).
+5. OPENROUTER_API_KEY env — OpenRouter route (cheap / free models).
 
 resolve() returns a Credentials object describing what mode + endpoint
 to use. build_agent() in agent.py consumes this to configure the LLM.
@@ -38,9 +41,9 @@ DEFAULT_OPENROUTER_URL = "https://openrouter.ai/api"
 
 @dataclass
 class Credentials:
-    mode: str            # "oauth" | "api_key"
-    token: str           # OAuth access token or API key
-    base_url: str
+    mode: str            # "claude_cli" | "oauth" | "api_key"
+    token: str           # OAuth access token or API key (empty for claude_cli)
+    base_url: str        # ignored in claude_cli mode
     model: str
     source: str          # short label for the CLI banner
     use_bearer: bool     # True → Authorization: Bearer; False → x-api-key
@@ -91,10 +94,23 @@ def _claude_code_oauth() -> tuple[str, int] | None:
 
 
 def resolve() -> Credentials | None:
-    # Escape hatch: skip Claude Code subscription detection when this env var
-    # is set. Useful for testing the API-key path on a machine that's also
-    # logged into Claude Code.
+    # Escape hatch: skip both subscription paths (CLI and raw OAuth) and go
+    # straight to API-key auth. Useful when also logged into Claude Code but
+    # you want to exercise the OpenRouter / API-key code path.
     skip_subscription = os.getenv("MINICLAUDE_PREFER_API_KEY") == "1"
+
+    if not skip_subscription:
+        # Lazy import to avoid pulling subprocess machinery during help/list runs.
+        from claude_cli_backend import is_claude_cli_available
+        if is_claude_cli_available():
+            return Credentials(
+                mode="claude_cli",
+                token="",
+                base_url="",
+                model=os.getenv("ANTHROPIC_MODEL") or DEFAULT_CLAUDE_MODEL,
+                source="Claude CLI (local subscription)",
+                use_bearer=False,
+            )
 
     sub = None if skip_subscription else _claude_code_oauth()
     if sub:

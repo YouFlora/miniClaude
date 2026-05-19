@@ -4,7 +4,10 @@ Graph shape (unchanged since M3):
     START → llm → (tool_calls?) → review → tools → llm → ... → END
 
 Auth — see credentials.resolve():
-- "oauth" mode (Claude Code subscription or ANTHROPIC_AUTH_TOKEN):
+- "claude_cli" mode: delegate to local `claude -p` (subprocess). Reuses
+  the user's Claude Code subscription, no API bill, no OAuth header
+  guessing — the CLI handles auth itself. See claude_cli_backend.py.
+- "oauth" mode (raw subscription token or ANTHROPIC_AUTH_TOKEN):
   inject "Authorization: Bearer <token>" + "anthropic-beta: oauth-2025-04-20"
   via default_headers, and prepend Claude Code's identity line to the
   system prompt (Anthropic's OAuth route rejects requests without it).
@@ -25,6 +28,7 @@ from langgraph.prebuilt import ToolNode
 from langgraph.types import interrupt
 
 from checkpointer import open_checkpointer
+from claude_cli_backend import ClaudeCliChatModel
 from credentials import Credentials, resolve
 from permissions import classify
 from tools import ALL_TOOLS
@@ -37,13 +41,16 @@ CLAUDE_CODE_IDENTITY = (
 )
 
 
-def load_system_prompt(*, oauth: bool) -> str:
+def load_system_prompt(*, identity_prefix: bool) -> str:
+    """Render the system prompt; prepend Claude Code's identity line when the
+    request will hit Anthropic's OAuth route (raw OAuth or claude_cli backend),
+    which rejects calls whose system prompt doesn't start with it."""
     body = PROMPT_PATH.read_text().format(
         cwd=os.getcwd(),
         platform=platform.system(),
         date=date.today().isoformat(),
     )
-    return (CLAUDE_CODE_IDENTITY + body) if oauth else body
+    return (CLAUDE_CODE_IDENTITY + body) if identity_prefix else body
 
 
 def latest_todos(messages) -> list[dict]:
@@ -126,15 +133,17 @@ def route_after_review(state: MessagesState) -> str:
     return "tools" if tool_calls else "llm"
 
 
-def build_llm(creds: Credentials) -> ChatAnthropic:
-    """Construct a raw ChatAnthropic (no tools bound) honouring the auth mode.
+def build_llm(creds: Credentials):
+    """Construct an LLM client honouring the auth mode. Return value
+    quacks like a ChatModel: has .bind_tools(tools) and .invoke(messages).
 
-    In oauth mode the Anthropic OAuth route checks three things server-side:
-    - Authorization: Bearer <token>  (we override the SDK's x-api-key)
-    - User-Agent starts with "claude-cli/"  (otherwise 403 "user-agent is not Claude Code")
-    - System prompt starts with "You are Claude Code..."  (added in load_system_prompt)
-    All three must line up or the request is rejected.
+    - claude_cli: shells out to `claude -p`, reuses the local subscription.
+    - oauth: ChatAnthropic with Bearer + Claude-Code identity headers.
+    - api_key: plain ChatAnthropic / OpenRouter via x-api-key.
     """
+    if creds.mode == "claude_cli":
+        return ClaudeCliChatModel(model=creds.model)
+
     headers: dict[str, str] = {}
     if creds.use_bearer:
         headers["Authorization"] = f"Bearer {creds.token}"
@@ -168,7 +177,11 @@ def current_credentials() -> Credentials:
 def build_agent():
     creds = current_credentials()
     llm = build_llm(creds).bind_tools(ALL_TOOLS)
-    system_prompt = load_system_prompt(oauth=(creds.mode == "oauth"))
+    # claude_cli also hits the OAuth route under the hood, so it needs the
+    # identity prefix just like raw oauth mode.
+    system_prompt = load_system_prompt(
+        identity_prefix=creds.mode in ("oauth", "claude_cli")
+    )
 
     def call_llm(state: MessagesState) -> dict:
         todos = latest_todos(state["messages"])

@@ -44,7 +44,9 @@ SUBAGENT_PROMPT_SUFFIX = (
 def build_subagent_graph(tools: list):
     creds = current_credentials()
     llm = build_llm(creds).bind_tools(tools)
-    sub_prompt = load_system_prompt(oauth=(creds.mode == "oauth")) + SUBAGENT_PROMPT_SUFFIX
+    sub_prompt = load_system_prompt(
+        identity_prefix=creds.mode in ("oauth", "claude_cli")
+    ) + SUBAGENT_PROMPT_SUFFIX
 
     def call_llm(state: MessagesState) -> dict:
         return {
